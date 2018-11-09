@@ -1,0 +1,79 @@
+version: '3'
+services:
+  omni_api:
+    image: docker.boople.co/infra/omnilayer-api:1.0.0
+    depends_on:
+      - omni_postgres
+      - omni_core
+      - omni_engine
+      - omni_redis
+    links:
+      - omni_postgres
+      - omni_core
+      - omni_redis
+    ports:
+      - "4005:80"
+
+  omni_explorer:
+    image: docker.boople.co/infra/omnilayer-explorer:1.0.0
+    depends_on:
+      - omni_api
+    links:
+      - omni_api
+    ports:
+      - "4006:3000"
+
+  omni_engine:
+    image: docker.boople.co/infra/omnilayer-engine:1.0.0
+    depends_on:
+      - omni_postgres
+      - omni_core
+      - omni_redis
+    links:
+      - omni_postgres
+      - omni_core
+      - omni_redis
+    environment:
+      FLYWAY_PLACEHOLDERS_OMNIAPIPASSWORD: omniapipass
+      FLYWAY_PLACEHOLDERS_OMNIENGINEPASSWORD: omnienginepass
+      PGUSER: postgres
+      PGPASSWORD: postgresspass
+      PGHOST: omni_postgres
+      PGPORT: 5432
+      OMNIDB_DATABASE: omni
+      NETWORK: testnet
+
+  omni_core:
+    image: mpugach/omnicored:v0.3.0-curl-alpine
+    volumes:
+      - omnicore:/omnicore/data
+    ports:
+      - "18532:18332"
+    command: >
+      -server
+      -testnet
+      -txindex
+      -rpcuser=username
+      -rpcpassword=password
+      -rpcallowip=172.0.0.0/8
+      -rpcport=18332
+
+  omni_postgres:
+    image: postgres:alpine
+    restart: always
+    ports:
+      - "5436:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    environment:
+      POSTGRES_PASSWORD: postgresspass
+      POSTGRES_DB: omni
+
+  omni_redis:
+    image: redis:alpine
+    restart: always
+
+volumes:
+  pgdata:
+  omnicore:
+

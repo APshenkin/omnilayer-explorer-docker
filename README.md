@@ -50,8 +50,8 @@ ENV variables:
 
 
 ### Explorer configuration
- - ./explorer/addDevMiddlewares.js - set target in proxy to your api instance 
- - ./explorer/constants.js  - set change api url rule to your api instance
+ - [./explorer/addDevMiddlewares.js](https://github.com/APshenkin/omnilayer-explorer-docker/blob/master/explorer/addDevMiddlewares.js#L36) - set target in proxy to your api instance 
+ - [./explorer/constants.js](https://github.com/APshenkin/omnilayer-explorer-docker/blob/master/explorer/constants.js#L20)  - set change api url rule to your api instance
 
 ### Postgres configuration
 

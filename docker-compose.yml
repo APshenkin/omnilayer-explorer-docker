@@ -1,7 +1,9 @@
 version: '3'
 services:
   omni_api:
-    image: docker.boople.co/infra/omnilayer-api:1.0.0
+    build:
+      context: api
+      dockerfile: Dockerfile
     depends_on:
       - omni_postgres
       - omni_core
@@ -15,7 +17,9 @@ services:
       - "4005:80"
 
   omni_explorer:
-    image: docker.boople.co/infra/omnilayer-explorer:1.0.0
+    build:
+      context: explorer
+      dockerfile: Dockerfile
     depends_on:
       - omni_api
     links:
@@ -24,7 +28,9 @@ services:
       - "4006:3000"
 
   omni_engine:
-    image: docker.boople.co/infra/omnilayer-engine:1.0.0
+    build:
+      context: engine
+      dockerfile: Dockerfile
     depends_on:
       - omni_postgres
       - omni_core

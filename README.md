@@ -54,5 +54,7 @@ ENV variables:
  - [./explorer/constants.js](https://github.com/APshenkin/omnilayer-explorer-docker/blob/master/explorer/constants.js#L20)  - set change api url rule to your api instance
 
 ### Postgres configuration
+ENV variables:
+ - POSTGRES_PASSWORD - set postgres default password
 
 

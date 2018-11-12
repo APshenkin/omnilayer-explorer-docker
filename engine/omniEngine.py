@@ -1,6 +1,7 @@
 from sql import *
 import os.path
 import sys
+import traceback
 from datetime import datetime
 from datetime import timedelta
 from cacher import *
@@ -90,6 +91,8 @@ else:
             except Exception,e:
                 #Catch any issues and stop processing. Try to undo any incomplete changes
                 print "Problem with ", e
+                error = traceback.format_exc()
+                print error.upper()
                 sys.stdout.flush()
                 if dbRollback():
                     print "Database rolledback, last successful block", (currentBlock -1)
@@ -225,6 +228,8 @@ else:
         except Exception,e:
             #Catch any issues and stop processing. Try to undo any incomplete changes
             print "Problem with ", e
+            error = traceback.format_exc()
+            print error.upper()
             sys.stdout.flush()
             if dbRollback():
                 print "Database rolledback, last successful block", (currentBlock -1)

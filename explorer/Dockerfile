@@ -14,8 +14,12 @@ RUN dpkg -i dumb-init_*.deb
 
 # Install omni explorer
 WORKDIR /home/ubuntu
+
+ARG OMNILAYER_VERSION=b6bb84235bf720e802d26ad215d0b243a16b190f
 RUN git clone https://github.com/OmniLayer/omniexplorer.git
 WORKDIR /home/ubuntu/omniexplorer
+
+RUN git checkout ${OMNILAYER_VERSION}
 
 # Patch several files
 COPY constants.js /home/ubuntu/omniexplorer/app/containers/App/constants.js

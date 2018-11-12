@@ -33,8 +33,13 @@ RUN curl -L https://repo1.maven.org/maven2/org/flywaydb/flyway-commandline/${FLY
 
 # Install engine
 WORKDIR /root
+
+ARG OMNILAYER_VERSION=b6bb84235bf720e802d26ad215d0b243a16b190f
+
 RUN git clone https://github.com/OmniLayer/omniEngine.git
 WORKDIR /root/omniEngine
+
+RUN git checkout ${OMNILAYER_VERSION}
 
 RUN pip install -r requirements.txt
 
@@ -49,11 +54,11 @@ COPY installOmniEngineCronJob.py /root/omniEngine/install/installOmniEngineCronJ
 
 # Patch omniEngine to force stdout print and use other configuration for testnet
 COPY omniEngine.py /root/omniEngine/omniEngine.py
-
-# Copy migrations
+COPY sql.py /root/omniEngine/sql.py
 COPY db /flyway/sql/
 
 RUN chmod +x /root/omniEngine/run.sh
+
 RUN mkdir /root/omniEngine/logs
 
 # add supervisor conf to launch nginx and api

@@ -56,5 +56,10 @@ ENV variables:
 ### Postgres configuration
 ENV variables:
  - POSTGRES_PASSWORD - set postgres default password
+ 
+### Known issues
+
+#### Testnet
+ - Error on inserting transaction `8dd6e8c1e39e86f1d398db74eeaba800e02c6fd1a1b9e7eb93ded2c63e538c6a`. The best option is to insert block 306337 manually
 
 

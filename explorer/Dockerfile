@@ -15,7 +15,7 @@ RUN dpkg -i dumb-init_*.deb
 # Install omni explorer
 WORKDIR /home/ubuntu
 
-ARG OMNILAYER_VERSION=b6bb84235bf720e802d26ad215d0b243a16b190f
+ARG OMNILAYER_VERSION=08ad012fcebee20368a6b9c801e69f48bd5e6c45
 RUN git clone https://github.com/OmniLayer/omniexplorer.git
 WORKDIR /home/ubuntu/omniexplorer
 

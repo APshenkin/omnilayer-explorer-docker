@@ -50,9 +50,11 @@ services:
       NETWORK: testnet
 
   omni_core:
-    image: mpugach/omnicored:v0.3.0-curl-alpine
+    build:
+      context: core
+      dockerfile: Dockerfile
     volumes:
-      - omnicore:/omnicore/data
+      - omnicore:/root/.bitcoin
     ports:
       - "18532:18332"
     command: >

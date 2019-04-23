@@ -14,3 +14,6 @@ BTCBAL_CACHE=600
 # Set to True to switch to processing testnet
 
 TESTNET = True if os.environ['NETWORK'] == 'testnet' else False
+
+#CoinMarketCap API Key
+CMCKEY = ''

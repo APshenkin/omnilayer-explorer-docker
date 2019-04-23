@@ -210,11 +210,19 @@ def reorgRollback(block):
     expireAccepts(-(block+1))
     expireCrowdsales(-BlockTime, "Omni")
 
+    #delete from txstats once we rollback all other data
+    dbExecute("delete from txstats where blocknumber>%s",[block])
     #delete from blocks once we rollback all other data
     dbExecute("delete from blocks where blocknumber>%s",[block])
     #reset txdbserialnum field to what it was before these blocks/tx went in
     dbExecute("select setval('transactions_txdbserialnum_seq', %s)",[newTxDBSerialNum])
 
+
+def updateLastRun():
+    dbExecute("with upsert as "
+              "(update settings set updated_at=DEFAULT where key='parserLastRun' returning *) "
+              "insert into settings (key,value) select 'parserLastRun','see updated_at timestamp' "
+              "where not exists (select * from upsert)")
 
 def updateTxStats():
     ROWS=dbSelect("select blocknumber,blocktime from blocks order by blocknumber desc limit 1")
@@ -222,14 +230,70 @@ def updateTxStats():
     btime=ROWS[0][1]
     ROWS=dbSelect("select max(blocknumber) from txstats")
     lastblock=ROWS[0][0]
-    if (curblock > lastblock):
-      ROWS=dbSelect("select count(*) from transactions where txrecvtime >= %s - '1 day'::INTERVAL and txrecvtime <= %s and txdbserialnum>0",(btime,btime))
-      txs=ROWS[0][0]
+    nextblock=lastblock+1
+    printdebug(("TxStats: lastblock",lastblock,", curblock:",str(curblock)),0)
+    while (nextblock <= curblock):
+      if updateTxStatsBlock(nextblock):
+        printdebug(("TxStats: Block",nextblock,"processed"),0)
+      else:
+        printdebug(("TxStats: Block",nextblock,"FAILED"),0)
+      nextblock+=1
+
+
+def updateTxStatsBlock(blocknumber):
+    try:
+      _block=int(blocknumber)
+    except:
+      return False
+    ROWS=dbSelect("select blocknumber,blocktime from blocks where blocknumber=%s order by blocknumber desc limit 1",[_block])
+    curblock=ROWS[0][0]
+    btime=ROWS[0][1]
+    try:
+      TROWS=dbSelect("select count(*) from transactions where txrecvtime >= %s - '1 day'::INTERVAL and txrecvtime <= %s and txdbserialnum>0",(btime,btime))
+      txs=TROWS[0][0]
       BROWS=dbSelect("select count(*) from transactions where txblocknumber=%s",[curblock])
       btxs=BROWS[0][0]
-      dbExecute("insert into txstats (blocknumber,blocktime,txcount,blockcount) values(%s,%s,%s,%s)",
-                (curblock, btime, txs,btxs))
-
+      txfsum=dbSelect("select atx.propertyid, sum(atx.balanceavailablecreditdebit), sp.propertydata->>'divisible' as divisible, count(atx.propertyid) as count "
+                     "from addressesintxs atx, transactions tx, smartproperties sp "
+                     "where atx.txdbserialnum=tx.txdbserialnum and atx.propertyid=sp.propertyid and sp.protocol='Omni' and tx.txstate='valid' and "
+                     "tx.txblocknumber=%s and atx.addressrole='recipient' group by atx.propertyid, sp.propertydata->>'divisible'",[curblock])
+      try:
+        VROWS=dbSelect("select sum(cast(value->>'total_usd' as numeric)) from txstats where blocktime >= %s - '1 day'::INTERVAL and blocktime <= %s",(btime,btime))
+        tval_day=int(VROWS[0][0])
+      except:
+        tval_day=0
+      valuelist={}
+      total=0
+      rbtcusd=dbSelect("select rate1for2 from exchangerates where protocol1='Fiat' and protocol2='Bitcoin' and propertyid1=0 and propertyid2=0 order by asof desc limit 1")
+      try:
+        btcusd=decimal.Decimal(rbtcusd[0][0])
+      except:
+        btcusd=decimal.Decimal(0)
+      for t in txfsum:
+        pid=t[0]
+        volume=decimal.Decimal(t[1])
+        divisible=t[2]
+        count=t[3]
+        if divisible in ['true','True',True]:
+          volume=decimal.Decimal(volume)/decimal.Decimal(1e8)
+        rawrate=dbSelect("select rate1for2 from exchangerates where protocol1='Bitcoin' and protocol2='Omni' and propertyid1=0 and propertyid2=%s order by asof desc limit 1",[pid])
+        try:
+          rate=decimal.Decimal(rawrate[0][0])
+        except:
+          rate=decimal.Decimal(0)
+        value=rate*btcusd*volume
+        rateusd=rate*btcusd
+        srate=str(float(rateusd)).split('.')
+        prate=decimal.Decimal(srate[0]+'.'+srate[1][:8])
+        value=int(round(value))
+        total+=value
+        valuelist[pid]={'rate_usd':str(prate),'volume':str(volume),'value_usd_rounded':value, 'tx_count': count}
+      fvalue={'total_usd':total, 'details':valuelist, 'value_24hr':tval_day}
+      dbExecute("insert into txstats (blocknumber,blocktime,txcount,blockcount,value) values(%s,%s,%s,%s,%s)",
+                (curblock, btime, txs, btxs, json.dumps(fvalue)))
+      return True
+    except:
+      return False
 
 def checkPending(blocktxs):
     #Check any pending tx to see if 1. They are in the current block of tx's we are processing or 2. 1 days have passed since broadcast and they are no longer in network.
@@ -284,7 +348,10 @@ def updateAddPending():
     sbacd=None
     rbacd=None
     sender = rawtx['sendingaddress']
-    receiver = rawtx['referenceaddress']
+    try:
+      receiver = rawtx['referenceaddress']
+    except:
+      receiver=''
     txtype = rawtx['type_int']
     txversion = rawtx['version']
     txhash = rawtx['txid']
@@ -1270,6 +1337,14 @@ def updateBalance(Address, Protocol, PropertyID, Ecosystem, BalanceAvailable, Ba
           except (ValueError, TypeError):
             BalanceFrozen=0
 
+        #frozen address can receive but not send. so if it receives anything make sure to update frozen tally
+        try:
+          if dbFrzn > 0 and BalanceAvailable != dbFrzn:
+            BalanceFrozen=int(BalanceFrozen)+int(BalanceAvailable)
+            BalanceAvailable=0
+        except (ValueError, TypeError):
+          pass
+
         dbExecute("UPDATE AddressBalances set BalanceAvailable=%s, BalanceReserved=%s, BalanceAccepted=%s, BalanceFrozen=%s, LastTxDBSerialNum=%s where address=%s and PropertyID=%s and Protocol=%s",
                   (BalanceAvailable, BalanceReserved, BalanceAccepted, BalanceFrozen, LastTxDBSerialNum, Address, PropertyID, Protocol) )
 
@@ -1291,7 +1366,7 @@ def expireCrowdsales(BlockTime, Protocol):
 
     else:
       #find the crowdsales that are ready to expire and update/expire them accordingly
-      expiring=dbSelect("select propertyid from smartproperties as sp inner join transactions as tx on (sp.createtxdbserialnum=tx.txdbserialnum) " 
+      expiring=dbSelect("select propertyid from smartproperties as sp inner join transactions as tx on (sp.createtxdbserialnum=tx.txdbserialnum) "
                         "where tx.txtype=51 and sp.protocol=%s and propertydata::json->>'active'='true' and "
                         "( cast(propertydata::json->>'deadline' as numeric) < %s or cast(propertydata::json->>'endedtime' as numeric) < %s)",
                         (Protocol, BlockTime, BlockTime))
@@ -1333,6 +1408,10 @@ def updateProperty(PropertyID, Protocol, LastTxDBSerialNum=None):
 
       if PropertyID in [1,2]:
         rawprop['blocktime']=1377994675
+        if PropertyID == 1:
+          rawprop['name']=u'Omni Token'
+        elif PropertyID == 2:
+          rawprop['name']=u'Test Omni Token'
 
       #if TxType == 51 or TxType == 53:
       try:
@@ -1361,15 +1440,17 @@ def updateProperty(PropertyID, Protocol, LastTxDBSerialNum=None):
       except Exception:
         printdebug("Updating Property. Not a Managed Property", 8)
 
+    PropertyName = rawprop['name']
+
     #if we where called with a tx update that otherwise just update json (expired by time update)
     if LastTxDBSerialNum == None:
-      dbExecute("update smartproperties set PropertyData=%s, Issuer=%s "
+      dbExecute("update smartproperties set PropertyData=%s, Issuer=%s, PropertyName=%s "
                 "where Protocol=%s and PropertyID=%s",
-                (json.dumps(rawprop), Issuer, Protocol, PropertyID))
+                (json.dumps(rawprop), Issuer, PropertyName, Protocol, PropertyID))
     else:
-      dbExecute("update smartproperties set LastTxDBSerialNum=%s, PropertyData=%s, Issuer=%s "
+      dbExecute("update smartproperties set LastTxDBSerialNum=%s, PropertyData=%s, Issuer=%s, PropertyName=%s "
                 "where Protocol=%s and PropertyID=%s",
-                (LastTxDBSerialNum, json.dumps(rawprop), Issuer, Protocol, PropertyID))
+                (LastTxDBSerialNum, json.dumps(rawprop), Issuer, PropertyName, Protocol, PropertyID))
 
 
 def insertProperty(rawtx, Protocol, PropertyID=None):
@@ -1462,7 +1543,7 @@ def getFlags(Protocol,name,data,url,PropertyID):
       sdata='%'+str(data)+'%'
       rdata=dbSelect("select count(*) from smartproperties where Protocol=%s and (LOWER(PropertyName) like LOWER(%s) or LOWER(PropertyData->>'data') like LOWER(%s) or LOWER(PropertyData->>'url') like LOWER(%s))", (Protocol, sdata,sdata,sdata))
     else:
-      rdata[[0]]
+      rdata=[[0]]
     if len(url) > 0:
       surl='%'+str(url)+'%'
       rurl=dbSelect("select count(*) from smartproperties where Protocol=%s and (LOWER(PropertyName) like LOWER(%s) or LOWER(PropertyData->>'data') like LOWER(%s) or LOWER(PropertyData->>'url') like LOWER(%s))", (Protocol, surl,surl,surl))
@@ -1607,10 +1688,14 @@ def insertTxAddr(rawtx, Protocol, TxDBSerialNum, Block):
           value_neg=0
         else:
           #if rawtx['result']['divisible']:
-          if getDivisible(rawtx):
-            value=int(decimal.Decimal(str(rawtx['result']['amount']))*decimal.Decimal(1e8))
-          else:
-            value=int(rawtx['result']['amount'])
+          try:
+            if getDivisible(rawtx):
+              value=int(decimal.Decimal(str(rawtx['result']['amount']))*decimal.Decimal(1e8))
+            else:
+              value=int(rawtx['result']['amount'])
+          except:
+            printdebug(("Invalid Amount: ",rawtx['result']['amount'], "continuing"), 0)
+            value = 0
           value_neg=(value*-1)
 
 
@@ -1690,7 +1775,14 @@ def insertTxAddr(rawtx, Protocol, TxDBSerialNum, Block):
       elif txtype == 4:
         #Send all
         Valid=rawtx['result']['valid']
-        Ecosystem=getEcosystem(rawtx['result']['ecosystem'])
+        try:
+          Ecosystem=getEcosystem(rawtx['result']['ecosystem'])
+        except:
+          try:
+            Ecosystem=getEcosystem(rawtx['result']['subsends'][0]['propertyid'])
+          except:
+            #default is all
+            Ecosystem=getEcosystem("all")
         RecvAddress = rawtx['result']['referenceaddress']
         RecvRole="recipient"
 
@@ -1804,7 +1896,6 @@ def insertTxAddr(rawtx, Protocol, TxDBSerialNum, Block):
           #Right now payments are only in btc
           #we already insert btc payments in btc processing might need to skip this
           PropertyIDPaid = 0
-          #AddressTxIndex =  Do we need to change this?
 
           if getdivisible_MP(PropertyIDBought):
             AmountBought=int(decimal.Decimal(str(payment['amountbought']))*decimal.Decimal(1e8))
@@ -1832,6 +1923,7 @@ def insertTxAddr(rawtx, Protocol, TxDBSerialNum, Block):
                     "values(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     (Seller, PropertyIDBought, Protocol, TxDBSerialNum, AddressTxIndex, AddressRole, BalanceAvailableCreditDebit, BalanceReservedCreditDebit, BalanceAcceptedCreditDebit, saletxdbserialnum))
 
+          AddressTxIndex+=1
           if Valid:
             updateBalance(Seller, Protocol, PropertyIDBought, Ecosystem, BalanceAvailableCreditDebit, BalanceReservedCreditDebit, BalanceAcceptedCreditDebit, TxDBSerialNum)
 
@@ -1845,6 +1937,7 @@ def insertTxAddr(rawtx, Protocol, TxDBSerialNum, Block):
                     "values(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     (Buyer, PropertyIDBought, Protocol, TxDBSerialNum, AddressTxIndex, AddressRole, BalanceAvailableCreditDebit, BalanceReservedCreditDebit, BalanceAcceptedCreditDebit,offertxdbserialnum))
 
+          AddressTxIndex+=1
           if Valid:
             updateBalance(Buyer, Protocol, PropertyIDBought, Ecosystem, BalanceAvailableCreditDebit, BalanceReservedCreditDebit, BalanceAcceptedCreditDebit, TxDBSerialNum)
 
@@ -2141,18 +2234,24 @@ def insertTxAddr(rawtx, Protocol, TxDBSerialNum, Block):
 
         ROWS=dbSelect("select BalanceAvailable,BalanceFrozen from addressbalances where address=%s and propertyid=%s", (Address, PropertyID))
 
-        if txtype == 185:
-          try:
-              BalanceAvailableCreditDebit = -int(ROWS[0][0])
-          except IndexError:
-              BalanceAvailableCreditDebit = 0
-          BalanceFrozenCreditDebit = (BalanceAvailableCreditDebit*-1)
-        elif txtype == 186:
-          try:
-              BalanceAvailableCreditDebit = int(ROWS[0][1])
-          except IndexError:
-              BalanceAvailableCreditDebit = 0
-          BalanceFrozenCreditDebit = (BalanceAvailableCreditDebit*-1)
+        #check to ensure the destination address actually had a balance that could be frozen (only gets updated if tx is valid below)
+        if len(ROWS) > 0:
+            if txtype == 185:
+              try:
+                  BalanceAvailableCreditDebit = -int(ROWS[0][0])
+              except IndexError:
+                  BalanceAvailableCreditDebit = 0
+              BalanceFrozenCreditDebit = (BalanceAvailableCreditDebit*-1)
+            elif txtype == 186:
+              try:
+                  BalanceAvailableCreditDebit = int(ROWS[0][1])
+              except IndexError:
+                  BalanceAvailableCreditDebit = 0
+              BalanceFrozenCreditDebit = (BalanceAvailableCreditDebit*-1)
+        else:
+          BalanceAvailableCreditDebit = 0
+          BalanceFrozenCreditDebit = 0
+
 
         dbExecute("insert into addressesintxs "
                   "(Address, PropertyID, Protocol, TxDBSerialNum, AddressTxIndex, AddressRole, BalanceAvailableCreditDebit, BalanceReservedCreditDebit, BalanceAcceptedCreditDebit, BalanceFrozenCreditDebit, linkedtxdbserialnum)"
@@ -2219,7 +2318,16 @@ def insertTx(rawtx, Protocol, blockheight, seq, TxDBSerialNum):
       else:
         valid=rawtx['result']['valid']
         TxState= getTxState(valid)
-        if TxType in [4,28]:
+        if TxType in [4]:
+          try:
+            Ecosystem=getEcosystem(rawtx['result']['ecosystem'])
+          except:
+            try:
+              Ecosystem=getEcosystem(rawtx['result']['subsends'][0]['propertyid'])
+            except:
+              #default is main
+              Ecosystem=getEcosystem("main")
+        elif TxType in [28]:
           Ecosystem=getEcosystem(rawtx['result']['ecosystem'])
         elif TxType in [25,26,27]:
           Ecosystem=getEcosystem(rawtx['result']['propertyidforsale'])

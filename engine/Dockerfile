@@ -1,4 +1,4 @@
-FROM ubuntu:14.04
+FROM ubuntu:16.04
 
 # install deps
 RUN apt-get update
@@ -6,12 +6,10 @@ RUN apt-get install -y software-properties-common
 RUN add-apt-repository ppa:openjdk-r/ppa
 RUN apt-get update
 RUN apt-get install -y git-core \
-                      libffi-dev \
                       python-dev \
-                      python-psycopg2 \
-                      postgresql \
+                      libffi-dev \
                       libpq-dev \
-                      libssl-dev \
+                      postgresql \
                       libcurl4-openssl-dev \
                       python-pip \
                       supervisor \
@@ -34,12 +32,14 @@ RUN curl -L https://repo1.maven.org/maven2/org/flywaydb/flyway-commandline/${FLY
 # Install engine
 WORKDIR /root
 
-ARG OMNILAYER_VERSION=b6bb84235bf720e802d26ad215d0b243a16b190f
+ARG OMNILAYER_VERSION=15baec3ec9c4583ad183958ff35462737f2406c3
 
 RUN git clone https://github.com/OmniLayer/omniEngine.git
 WORKDIR /root/omniEngine
 
 RUN git checkout ${OMNILAYER_VERSION}
+
+RUN pip install --upgrade pip
 
 RUN pip install -r requirements.txt
 
